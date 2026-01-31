@@ -1,8 +1,0 @@
-pandas
-prophet
-scikit-learn
-streamlit
-plotly
-folium
-streamlit-folium
-pytest
