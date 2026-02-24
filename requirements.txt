@@ -2,9 +2,5 @@ pandas
 plotly
 folium
 streamlit-folium
-pytest
 numpy
-altair<5
-scikit-learn
-prophet
 streamlit>=1.40.0
