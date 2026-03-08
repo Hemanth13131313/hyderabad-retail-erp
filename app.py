@@ -41,24 +41,17 @@ def sanitize_input(user_input):
     return re.sub(r'[^\w\s\-\.\@]', '', user_input)
 
 # --- AUTHENTICATION MODULE ---
-CREDENTIALS = {
-    "admin": {
-        "hash": hash_password("admin123"),
-        "role": "Admin",
-        "store": "All"
-    },
-    "employee": {
-        "hash": hash_password("emp123"),
-        "role": "Employee",
-        "store": "Hitech City"
-    }
-}
+# CREDENTIALS dict removed, we now use the 'employees' table in session_state
 
 def login_user(username, password):
     safe_user = sanitize_input(username)
-    if safe_user in CREDENTIALS:
-        if CREDENTIALS[safe_user]["hash"] == hash_password(password):
-            return True, CREDENTIALS[safe_user]["role"], CREDENTIALS[safe_user]["store"]
+    if 'db' in st.session_state and 'employees' in st.session_state['db']:
+        employees_df = st.session_state['db']['employees']
+        user_record = employees_df[(employees_df['Username'] == safe_user) & (employees_df['Status'] == 'Active')]
+        if not user_record.empty:
+            stored_hash = user_record.iloc[0]['PasswordHash']
+            if stored_hash == hash_password(password):
+                return True, user_record.iloc[0]['Role'], user_record.iloc[0]['Store']
     return False, None, None
 
 # ==============================================================================
@@ -123,13 +116,38 @@ def initialize_data_optimized():
          {'Date': (datetime.now() - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M"), 'Store': 'Charminar', 'Product': 'Rice (25kg)', 'Quantity': 20, 'Status': 'Approved'}
     ])
 
+    # Employees
+    employees_data = [
+        {'EmpID': 'EMP-0001', 'Name': 'Super Admin', 'Username': 'admin', 'PasswordHash': hash_password('admin123'), 'Contact': 'admin@nexus.com', 'Role': 'Admin', 'Store': 'All', 'Wage': 50000, 'Status': 'Active'},
+        {'EmpID': 'EMP-1042', 'Name': 'Store Manager Hitech', 'Username': 'manager1', 'PasswordHash': hash_password('mgr123'), 'Contact': 'mgr.hitech@nexus.com', 'Role': 'Manager', 'Store': 'Hitech City', 'Wage': 35000, 'Status': 'Active'},
+        {'EmpID': 'EMP-2051', 'Name': 'Cashier Hitech', 'Username': 'employee', 'PasswordHash': hash_password('emp123'), 'Contact': 'cashier.hitech@nexus.com', 'Role': 'Employee', 'Store': 'Hitech City', 'Wage': 20000, 'Status': 'Active'}
+    ]
+    employees_df = pd.DataFrame(employees_data)
+
+    # Attendance
+    attendance_df = pd.DataFrame(columns=['EmpID', 'Date', 'CheckIn', 'CheckOut'])
+
+    # Audit Logs
+    audit_logs_df = pd.DataFrame(columns=['Timestamp', 'User', 'Action', 'Details'])
+
+    # Purchase Orders
+    po_df = pd.DataFrame(columns=['PO_ID', 'Date', 'Supplier', 'Product', 'Quantity', 'TotalCost', 'Status'])
+
+    # Shifts
+    shifts_df = pd.DataFrame(columns=['ShiftID', 'EmpID', 'Store', 'Date', 'StartCash', 'EndCash', 'Status'])
+
     return {
         'inventory': df,
         'sales': sales_df,
         'dispatches': dispatches_df,
         'requests': requests_df,
         'stores': stores,
-        'products': products
+        'products': products,
+        'employees': employees_df,
+        'attendance': attendance_df,
+        'audit_logs': audit_logs_df,
+        'purchase_orders': po_df,
+        'shifts': shifts_df
     }
 
 if 'db' not in st.session_state:
@@ -147,7 +165,7 @@ if 'auth_status' not in st.session_state:
 def render_admin_dashboard():
     db = st.session_state['db']
     
-    tabs = st.tabs(["📊 Sales Tracking", "🚚 Dispatch Monitoring", "🔮 AI Demand Forecasting", "📥 Store Requests Dashboard"])
+    tabs = st.tabs(["📊 Sales Tracking", "🚚 Dispatch Monitoring", "🔮 AI Demand Forecasting", "📥 Store Requests Dashboard", "� Inter-Store Transfers", "📦 Supplier & POs", "�👥 HR Management", "💰 Payroll & Audit"])
     
     # TAB 1: Sales Tracking
     with tabs[0]:
@@ -156,27 +174,90 @@ def render_admin_dashboard():
             sales_df = db['sales'].copy()
             sales_df['Date'] = pd.to_datetime(sales_df['Date'])
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Sales Events", len(sales_df))
-            c2.metric("Total Items Sold", sales_df['Quantity'].sum())
-            top_store = sales_df.groupby('Location')['Quantity'].sum().idxmax()
-            c3.metric("Top Performing Store", top_store)
+            # Sub-tabs for better organization
+            s_tabs = st.tabs(["Overview & Trends", "Peak Hour Heatmap", "Dead Stock Analysis"])
             
-            st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Sales by Product**")
-                prod_sales = sales_df.groupby('Product')['Quantity'].sum().reset_index()
-                fig1 = px.pie(prod_sales, values='Quantity', names='Product', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-                st.plotly_chart(fig1, width='stretch')
-            with col2:
-                st.markdown("**Sales by Store**")
-                store_sales = sales_df.groupby('Location')['Quantity'].sum().reset_index()
-                fig2 = px.bar(store_sales, x='Location', y='Quantity', color='Location', color_discrete_sequence=px.colors.qualitative.Set2)
-                st.plotly_chart(fig2, width='stretch')
+            with s_tabs[0]:
+                colA, colB = st.columns([1, 3])
+                with colA:
+                    st.markdown("**Date Range Filter**")
+                    min_date = sales_df['Date'].min().date()
+                    max_date = sales_df['Date'].max().date()
+                    start_d = st.date_input("Start Date", min_date, min_value=min_date, max_value=max_date)
+                    end_d = st.date_input("End Date", max_date, min_value=min_date, max_value=max_date)
+                    
+                # Filter data
+                mask = (sales_df['Date'].dt.date >= start_d) & (sales_df['Date'].dt.date <= end_d)
+                filtered_sales = sales_df.loc[mask]
                 
-            st.markdown("**Recent Global Sales Logs**")
-            st.dataframe(sales_df.sort_values(by='Date', ascending=False).head(15), width='stretch', hide_index=True)
+                if not filtered_sales.empty:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Total Sales Events", len(filtered_sales))
+                    c2.metric("Total Items Sold", filtered_sales['Quantity'].sum())
+                    top_store = filtered_sales.groupby('Location')['Quantity'].sum().idxmax()
+                    c3.metric("Top Performing Store", top_store)
+                    
+                    st.divider()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Sales by Product**")
+                        prod_sales = filtered_sales.groupby('Product')['Quantity'].sum().reset_index()
+                        fig1 = px.pie(prod_sales, values='Quantity', names='Product', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                        st.plotly_chart(fig1, width='stretch')
+                    with col2:
+                        st.markdown("**Sales by Store**")
+                        store_sales = filtered_sales.groupby('Location')['Quantity'].sum().reset_index()
+                        fig2 = px.bar(store_sales, x='Location', y='Quantity', color='Location', color_discrete_sequence=px.colors.qualitative.Set2)
+                        st.plotly_chart(fig2, width='stretch')
+                        
+                    st.markdown("**Recent Global Sales Logs**")
+                    st.dataframe(filtered_sales.sort_values(by='Date', ascending=False).head(15), width='stretch', hide_index=True)
+                else:
+                    st.warning("No sales found in the selected date range.")
+            
+            with s_tabs[1]:
+                st.markdown("### Peak Hour Sales Heatmap")
+                st.markdown("Identify the busiest times across stores for optimized shift scheduling.")
+                
+                # Extract Hours
+                hm_df = sales_df.copy()
+                hm_df['Hour'] = hm_df['Date'].dt.hour
+                
+                # Count sales per store per hour
+                heatmap_data = hm_df.groupby(['Location', 'Hour']).size().reset_index(name='Transactions')
+                
+                fig_hm = px.density_heatmap(
+                    heatmap_data, x="Hour", y="Location", z="Transactions",
+                    nbinsx=24, color_continuous_scale="Viridis",
+                    title="Transaction Volume by Hour and Location"
+                )
+                fig_hm.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1))
+                st.plotly_chart(fig_hm, width='stretch')
+
+            with s_tabs[2]:
+                st.markdown("### Dead Stock Analytics")
+                
+                ds_range = st.selectbox("Inactivity Threshold (Days)", [30, 60, 90], index=0)
+                cutoff_date = datetime.now() - timedelta(days=ds_range)
+                
+                # Find all store-product combinations that have NO sales since cutoff
+                recent_sales = sales_df[sales_df['Date'] >= cutoff_date]
+                sold_items = recent_sales[['Location', 'Product']].drop_duplicates()
+                sold_items['Sold_Recently'] = True
+                
+                inv = db['inventory']
+                stores_only = inv[inv['Type'] == 'Store'].copy()
+                
+                # Merge to find Unsold items
+                merged = pd.merge(stores_only, sold_items, on=['Location', 'Product'], how='left')
+                dead_stock = merged[merged['Sold_Recently'].isna()]
+                
+                if not dead_stock.empty:
+                    st.warning(f"Found {len(dead_stock)} product allocations with 0 sales in the last {ds_range} days.")
+                    st.dataframe(dead_stock[['Location', 'Product', 'Current_Stock', 'Target_Stock']].sort_values(by='Current_Stock', ascending=False), hide_index=True, width='stretch')
+                else:
+                    st.success(f"Excellent! All inventory lines have seen movement in the last {ds_range} days.")
+                    
         else:
             st.info("No sales records available.")
 
@@ -341,6 +422,212 @@ def render_admin_dashboard():
         else:
             st.info("No communications from the network.")
 
+    # TAB 5: Inter-Store Transfers
+    with tabs[4]:
+        st.subheader("Direct Peer-to-Peer Store Transfers")
+        st.markdown("Rebalance inventory directly between retail locations without routing through the central Hub.")
+        
+        with st.form("inter_store_transfer"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                source_store = st.selectbox("Source (Sending Store)", db['stores'])
+            with col2:
+                dest_store = st.selectbox("Destination (Receiving Store)", db['stores'], index=1)
+            with col3:
+                transfer_prod = st.selectbox("Product", db['products'])
+                
+            transfer_qty = st.number_input("Quantity to Move", min_value=1, max_value=500, value=10)
+            
+            if st.form_submit_button("Execute Direct Transfer", type="primary"):
+                if source_store == dest_store:
+                    st.error("Source and Destination cannot be the same.")
+                else:
+                    inv = st.session_state['db']['inventory']
+                    src_idx = inv[(inv['Location'] == source_store) & (inv['Product'] == transfer_prod)].index[0]
+                    src_stock = inv.at[src_idx, 'Current_Stock']
+                    
+                    if src_stock >= transfer_qty:
+                        # Deduct from Source
+                        st.session_state['db']['inventory'].at[src_idx, 'Current_Stock'] -= transfer_qty
+                        
+                        # Add to Destination
+                        dest_idx = inv[(inv['Location'] == dest_store) & (inv['Product'] == transfer_prod)].index[0]
+                        st.session_state['db']['inventory'].at[dest_idx, 'Current_Stock'] += transfer_qty
+                        
+                        # Add Audit Log
+                        audit_log = pd.DataFrame([{
+                            'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'User': 'admin',
+                            'Action': 'INTER_STORE_TRANSFER',
+                            'Details': f"Moved {transfer_qty}x {transfer_prod} from {source_store} to {dest_store}"
+                        }])
+                        st.session_state['db']['audit_logs'] = pd.concat([st.session_state['db']['audit_logs'], audit_log], ignore_index=True)
+                        
+                        st.success(f"Transfer Complete! {transfer_qty} units of {transfer_prod} moved from {source_store} to {dest_store}.")
+                        st.rerun()
+                    else:
+                        st.error(f"Transfer Failed. {source_store} only has {src_stock} units of {transfer_prod}.")
+                        
+    # TAB 6: Supplier & PO Management
+    with tabs[5]:
+        st.subheader("Procurement & Supplier Management")
+        st.markdown("Manage Purchase Orders to restock the central Kompally Hub.")
+        
+        c_po1, c_po2 = st.columns([1, 2])
+        
+        with c_po1:
+            st.markdown("### Create Purchase Order")
+            with st.form("new_po_form"):
+                supplier_name = st.text_input("Supplier/Vendor Name", value="Global Electronics Ltd.")
+                po_prod = st.selectbox("Product Line", db['products'])
+                po_qty = st.number_input("Order Quantity", min_value=50, max_value=10000, value=500, step=50)
+                unit_cost = st.number_input("Wholesale Unit Cost (₹)", min_value=1.0, value=150.0)
+                
+                total_cost = po_qty * unit_cost
+                st.markdown(f"**Estimated Total:** ₹{total_cost:,.2f}")
+                
+                if st.form_submit_button("Issue PO to Supplier", type="primary"):
+                    new_po_id = f"PO-{np.random.randint(40000, 99999)}"
+                    new_po = pd.DataFrame([{
+                        'PO_ID': new_po_id,
+                        'Date': datetime.now().strftime("%Y-%m-%d"),
+                        'Supplier': supplier_name,
+                        'Product': po_prod,
+                        'Quantity': po_qty,
+                        'TotalCost': total_cost,
+                        'Status': 'Issued'
+                    }])
+                    st.session_state['db']['purchase_orders'] = pd.concat([db['purchase_orders'], new_po], ignore_index=True)
+                    st.success(f"PO {new_po_id} successfully issued to {supplier_name}.")
+                    st.rerun()
+                    
+        with c_po2:
+            st.markdown("### Active Purchase Orders")
+            pos = db['purchase_orders']
+            
+            if not pos.empty:
+                st.dataframe(pos.sort_values(by='Date', ascending=False), hide_index=True, width='stretch')
+                
+                issued_pos = pos[pos['Status'] == 'Issued']
+                if not issued_pos.empty:
+                    st.markdown("**Receive Goods into Hub**")
+                    recv_po = st.selectbox("Select PO to Receive", issued_pos['PO_ID'] + " - " + issued_pos['Product'])
+                    
+                    if st.button("Confirm Goods Received at Hub"):
+                        po_id = recv_po.split(" - ")[0]
+                        idx = pos[pos['PO_ID'] == po_id].index[0]
+                        
+                        # Update status
+                        st.session_state['db']['purchase_orders'].at[idx, 'Status'] = 'Received'
+                        
+                        # Add to Hub Inventory
+                        prod = pos.loc[idx, 'Product']
+                        qty = pos.loc[idx, 'Quantity']
+                        
+                        inv = st.session_state['db']['inventory']
+                        hub_idx = inv[(inv['Location'] == 'Kompally Hub') & (inv['Product'] == prod)].index[0]
+                        st.session_state['db']['inventory'].at[hub_idx, 'Current_Stock'] += qty
+                        
+                        st.success(f"Goods received! {qty}x {prod} added to Kompally Hub inventory.")
+                        st.rerun()
+            else:
+                st.info("No Purchase Orders currently active.")
+
+    # TAB 7: HR Management (Adding Staff & Soft Delete)
+    with tabs[6]:
+        st.subheader("Employee Directory & Management")
+        employees = db['employees']
+        
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown("**Active Workforce**")
+            st.dataframe(employees[['EmpID', 'Name', 'Role', 'Store', 'Contact', 'Wage', 'Status']], hide_index=True, width='stretch')
+        
+        with c2:
+            st.markdown("**Action Panel**")
+            with st.expander("➕ Onboard New Employee"):
+                with st.form("new_employee_form"):
+                    n_name = st.text_input("Full Name")
+                    n_user = st.text_input("Username")
+                    n_pass = st.text_input("Password", type="password")
+                    n_role = st.selectbox("Role", ["Employee", "Manager", "Admin"])
+                    n_store = st.selectbox("Assigned Store", db['stores'] + ["All"])
+                    n_wage = st.number_input("Base Monthly Wage (₹)", min_value=5000)
+                    
+                    if st.form_submit_button("Register Staff"):
+                        if n_name and n_user and n_pass:
+                            new_emp_id = f"EMP-{np.random.randint(3000, 9999)}"
+                            new_emp = pd.DataFrame([{
+                                'EmpID': new_emp_id, 'Name': n_name, 'Username': n_user, 'PasswordHash': hash_password(n_pass),
+                                'Contact': f"{n_user}@nexus.com", 'Role': n_role, 'Store': n_store, 'Wage': n_wage, 'Status': 'Active'
+                            }])
+                            st.session_state['db']['employees'] = pd.concat([employees, new_emp], ignore_index=True)
+                            st.success(f"Successfully onboarded {n_name} ({new_emp_id})")
+                            st.rerun()
+                            
+            with st.expander("🛠️ Update / Soft Delete Staff"):
+                u_emp = st.selectbox("Select Employee", employees['EmpID'] + " - " + employees['Name'])
+                if u_emp:
+                    sel_id = u_emp.split(" - ")[0]
+                    emp_rec = employees[employees['EmpID'] == sel_id].iloc[0]
+                    
+                    new_status = st.radio("Account Status", ["Active", "Inactive"], index=0 if emp_rec['Status'] == 'Active' else 1)
+                    if st.button("Update Status"):
+                        idx = employees[employees['EmpID'] == sel_id].index[0]
+                        st.session_state['db']['employees'].at[idx, 'Status'] = new_status
+                        
+                        # Add audit log
+                        audit_log = pd.DataFrame([{
+                            'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'User': 'admin',
+                            'Action': 'STATUS_CHANGE',
+                            'Details': f"Changed status of {sel_id} to {new_status}"
+                        }])
+                        st.session_state['db']['audit_logs'] = pd.concat([st.session_state['db']['audit_logs'], audit_log], ignore_index=True)
+                        
+                        st.success(f"Status updated to {new_status}")
+                        st.rerun()
+                        
+    # TAB 6: Payroll & Audit Tracking
+    with tabs[5]:
+        st.subheader("Salaries & Security Operations")
+        
+        p_c1, p_c2 = st.columns(2)
+        with p_c1:
+            st.markdown("### Automated Payroll Processing")
+            st.markdown("Calculates total hours/days worked based on Check-In logs.")
+            
+            att = db['attendance']
+            if not att.empty:
+                # Merge attendance with employee DB to calculate wages
+                valid_att = att.dropna(subset=['CheckOut']) # Only completed shifts
+                if not valid_att.empty:
+                    # Calculate dummy 'days worked' by group counting
+                    days_worked = valid_att.groupby('EmpID').size().reset_index(name='Days_Worked')
+                    emp_wage = employees[['EmpID', 'Name', 'Wage']]
+                    
+                    payroll = pd.merge(days_worked, emp_wage, on='EmpID')
+                    # Assume base wage is for 30 days, calculate daily rate
+                    payroll['Calculated_Payout'] = (payroll['Wage'] / 30 * payroll['Days_Worked']).astype(int)
+                    
+                    st.dataframe(payroll[['EmpID', 'Name', 'Days_Worked', 'Calculated_Payout']], hide_index=True, width='stretch')
+                    
+                    if st.button("Generate Selected Payslip (PDF Mock)"):
+                        st.success("📄 Generating PDF... (Simulated download complete: 'payslip_EMP.pdf')")
+                else:
+                    st.info("No completed shifts found to calculate payroll.")
+            else:
+                st.info("No attendance records logged yet.")
+                
+        with p_c2:
+            st.markdown("### Global System Audit Trail")
+            st.markdown("Immutable record of manual overrides and sensitive actions.")
+            audits = db['audit_logs']
+            if not audits.empty:
+                st.dataframe(audits.sort_values(by='Timestamp', ascending=False), hide_index=True, width='stretch')
+            else:
+                st.info("No audit logs recorded yet. Manual inventory changes will appear here.")
+
 
 def render_employee_dashboard():
     db = st.session_state['db']
@@ -348,7 +635,7 @@ def render_employee_dashboard():
     
     st.markdown(f"### Regional Store Manager: 📍 **{my_store}**")
     
-    tabs = st.tabs(["📦 Local Inventory Tracker", "🛒 Daily Sales Input", "📤 RequestHQ Supplies"])
+    tabs = st.tabs(["📦 Local Inventory Tracker", "🛒 Daily Sales Input", "📤 RequestHQ Supplies", "⏱️ Attendance & Shifts"])
     
     # TAB 1: Local Inventory
     with tabs[0]:
@@ -366,39 +653,97 @@ def render_employee_dashboard():
         if not critical.empty:
             st.warning("⚠️ High Deficit Found. Switch to the 'RequestHQ Supplies' tab to restock.")
                 
-    # TAB 2: Sales Updates
+    # TAB 2: Sales Updates & POS
     with tabs[1]:
-        st.subheader("Point of Sale (POS) Log")
-        st.markdown("Record items purchased by customers to sync back with HQ.")
+        st.subheader("Point of Sale (POS) & Checkout")
+        st.markdown("Process transactions, handle returns, and document damaged goods.")
+        
+        # Mock Barcode Scanner integration
+        st.markdown("### 🛒 Rapid Checkout")
+        mock_barcode = st.text_input("Scan Barcode (Enter Product Name to mock)", key="barcode_input")
+        default_prod = db['products'].index(mock_barcode) if mock_barcode in db['products'] else 0
         
         with st.form("sales_entry"):
-            prod_sold = st.selectbox("Product Profile", db['products'])
-            qty_sold = st.number_input("Units Sold", min_value=1, max_value=500, value=1)
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                prod_sold = st.selectbox("Select or verify scanned product line", db['products'], index=default_prod)
+            with col2:
+                tx_type = st.selectbox("Transaction Type", ["Sale", "Return / Refund", "Damaged / Broken goods"])
+                
+            qty_sold = st.number_input("Units", min_value=1, max_value=500, value=1)
             
-            if st.form_submit_button("Finalize Sale", type="primary"):
+            # Offline Mode Mock
+            offline_mode = st.checkbox("Simulate Offline Mode (Network Outage)")
+            
+            if st.form_submit_button("Submit Transaction", type="primary"):
                 # Evaluate available local stock
                 inv = st.session_state['db']['inventory']
                 inv_idx = inv[(inv['Location'] == my_store) & (inv['Product'] == prod_sold)].index[0]
                 current = inv.at[inv_idx, 'Current_Stock']
                 
-                if current >= qty_sold:
-                    # Deduct from local inventory
-                    st.session_state['db']['inventory'].at[inv_idx, 'Current_Stock'] -= qty_sold
-                    
-                    # Store new sale log
-                    new_log = pd.DataFrame([{
-                        'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        'Location': my_store,
-                        'Product': prod_sold,
-                        'Quantity': qty_sold
-                    }])
-                    st.session_state['db']['sales'] = pd.concat([new_log, st.session_state['db']['sales']], ignore_index=True)
-                    
-                    st.success(f"Sale successful. {qty_sold}x {prod_sold} removed from local stock.")
-                    st.rerun()
+                # Handling Sales
+                if tx_type == "Sale":
+                    if current >= qty_sold:
+                        # Deduct from local inventory
+                        st.session_state['db']['inventory'].at[inv_idx, 'Current_Stock'] -= qty_sold
+                        
+                        tx_record = {
+                            'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            'Location': my_store,
+                            'Product': prod_sold,
+                            'Quantity': qty_sold,
+                            'Status': 'Cached' if offline_mode else 'Synced'
+                        }
+                        
+                        if offline_mode:
+                            if 'offline_cache' not in st.session_state:
+                                st.session_state['offline_cache'] = []
+                            st.session_state['offline_cache'].append(tx_record)
+                            st.warning(f"Network Offline. Sale of {qty_sold}x {prod_sold} cached locally.")
+                        else:
+                            new_log = pd.DataFrame([tx_record])
+                            st.session_state['db']['sales'] = pd.concat([new_log, st.session_state['db']['sales']], ignore_index=True)
+                            st.success(f"Sale successful. {qty_sold}x {prod_sold} removed from local stock.")
+                        st.rerun()
+                    else:
+                        st.error(f"Transaction Error: You only have {current} units of {prod_sold} on shelves.")
+                
+                # Handling Returns & Damages
                 else:
-                    st.error(f"Transaction Error: You only have {current} units of {prod_sold} on shelves.")
+                    if tx_type == "Return / Refund":
+                        # Add back to inventory for a return
+                        st.session_state['db']['inventory'].at[inv_idx, 'Current_Stock'] += qty_sold
+                        st.success(f"Return Processed! {qty_sold}x {prod_sold} successfully restocked.")
+                    elif tx_type == "Damaged / Broken goods":
+                        # Deduct from inventory since it's un-sellable
+                        if current >= qty_sold:
+                            st.session_state['db']['inventory'].at[inv_idx, 'Current_Stock'] -= qty_sold
+                            st.warning(f"Shrinkage logged. {qty_sold}x {prod_sold} removed due to damage.")
+                        else:
+                            st.error(f"Cannot log {qty_sold} damages, only {current} exist in system.")
+                            st.stop()
+                            
+                    # Audit Trail for returns/damages
+                    audit_log = pd.DataFrame([{
+                        'Timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'User': st.session_state.get('user_username', 'employee'),
+                        'Action': 'POS_EXCEPTION',
+                        'Details': f"{tx_type}: {qty_sold}x {prod_sold} at {my_store}"
+                    }])
+                    st.session_state['db']['audit_logs'] = pd.concat([st.session_state['db']['audit_logs'], audit_log], ignore_index=True)
+                    st.rerun()
                     
+        # Offline Cache Sync Interface
+        if 'offline_cache' in st.session_state and len(st.session_state['offline_cache']) > 0:
+            st.warning(f"🔌 Connection Restored? You have {len(st.session_state['offline_cache'])} unsynced transactions.")
+            if st.button("Sync Cached Data to HQ"):
+                cached_df = pd.DataFrame(st.session_state['offline_cache'])
+                cached_df['Status'] = 'Synced'
+                st.session_state['db']['sales'] = pd.concat([cached_df, st.session_state['db']['sales']], ignore_index=True)
+                st.session_state['offline_cache'] = [] # Clear out cache
+                st.success("All offline transactions successfully synced with HQ database!")
+                st.rerun()
+                
         st.markdown("**Your Recent Store Sales**")
         my_sales = db['sales'][db['sales']['Location'] == my_store]
         if not my_sales.empty:
@@ -434,6 +779,88 @@ def render_employee_dashboard():
             st.dataframe(my_reqs, width='stretch', hide_index=True)
         else:
             st.info("You haven't requested any items recently.")
+            
+    # TAB 4: Attendance & Shifts
+    with tabs[3]:
+        st.subheader("Shift Management & Time Tracking")
+        
+        # Determine Current Logged In Employee ID
+        # (For demo purposes, we infer from their Username, since st.session_state doesn't have EmpID directly yet)
+        # We should find EmpID by joining with Employees table based on Username.
+        safe_user = sanitize_input(st.session_state.get('user_username', 'employee')) # Fallback for demo
+        emp_match = db['employees'][db['employees']['Username'] == safe_user]
+        
+        if not emp_match.empty:
+            my_emp_id = emp_match.iloc[0]['EmpID']
+            my_name = emp_match.iloc[0]['Name']
+            
+            st.markdown(f"**Employee:** {my_name} ({my_emp_id})")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("### Daily Attendance")
+                att = db['attendance']
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                
+                # Check if already checked in today
+                today_att = att[(att['EmpID'] == my_emp_id) & (att['Date'] == today_str)]
+                
+                if today_att.empty:
+                    if st.button("⏰ Check In for the Day", type="primary"):
+                        new_att = pd.DataFrame([{
+                            'EmpID': my_emp_id, 'Date': today_str, 
+                            'CheckIn': datetime.now().strftime("%H:%M:%S"), 'CheckOut': None
+                        }])
+                        st.session_state['db']['attendance'] = pd.concat([att, new_att], ignore_index=True)
+                        st.success("Successfully Checked In! Have a great shift.")
+                        st.rerun()
+                elif pd.isna(today_att.iloc[0]['CheckOut']):
+                    st.success(f"Checked In at {today_att.iloc[0]['CheckIn']}")
+                    if st.button("🚪 Check Out"):
+                        idx = att[(att['EmpID'] == my_emp_id) & (att['Date'] == today_str)].index[0]
+                        st.session_state['db']['attendance'].at[idx, 'CheckOut'] = datetime.now().strftime("%H:%M:%S")
+                        st.success("Successfully Checked Out. See you tomorrow!")
+                        st.rerun()
+                else:
+                    st.info(f"Shift Completed. Checked In: {today_att.iloc[0]['CheckIn']} | Checked Out: {today_att.iloc[0]['CheckOut']}")
+                    
+            with c2:
+                st.markdown("### Cash Drawer Tracking")
+                shifts = db['shifts']
+                
+                # Find active shift
+                active_shift = shifts[(shifts['EmpID'] == my_emp_id) & (shifts['Status'] == 'Active')]
+                
+                if active_shift.empty:
+                    with st.form("start_shift"):
+                        start_cash = st.number_input("Starting Register Cash (₹)", min_value=0.0, value=5000.0)
+                        if st.form_submit_button("Start Register Shift"):
+                            new_shift = pd.DataFrame([{
+                                'ShiftID': f"SHF-{np.random.randint(1000,9999)}",
+                                'EmpID': my_emp_id, 'Store': my_store, 
+                                'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                'StartCash': start_cash, 'EndCash': None, 'Status': 'Active'
+                            }])
+                            st.session_state['db']['shifts'] = pd.concat([shifts, new_shift], ignore_index=True)
+                            st.success("Cash Register Shift Started.")
+                            st.rerun()
+                else:
+                    shift_id = active_shift.iloc[0]['ShiftID']
+                    st.info(f"Active Shift: {shift_id} | Started with: ₹{active_shift.iloc[0]['StartCash']}")
+                    
+                    with st.form("end_shift"):
+                        end_cash = st.number_input("Ending Register Cash (₹)", min_value=0.0, value=float(active_shift.iloc[0]['StartCash']))
+                        if st.form_submit_button("End Register Shift"):
+                            idx = shifts[shifts['ShiftID'] == shift_id].index[0]
+                            st.session_state['db']['shifts'].at[idx, 'EndCash'] = end_cash
+                            st.session_state['db']['shifts'].at[idx, 'Status'] = 'Completed'
+                            st.success(f"Shift Ended. Cash differential recorded.")
+                            st.rerun()
+                            
+            st.markdown("### Your Logged Records")
+            st.dataframe(att[att['EmpID'] == my_emp_id].tail(5), hide_index=True, width='stretch')
+        else:
+            st.error("Employee Profile not found. Please contact Hub HR.")
 
 
 def main():
@@ -454,6 +881,7 @@ def main():
                         st.session_state['auth_status'] = True
                         st.session_state['user_role'] = role
                         st.session_state['user_store'] = store
+                        st.session_state['user_username'] = username
                         st.success(f"Access granted: {role}. Preparing dashboard...")
                         # Give the success message half a second to show up
                         time.sleep(0.5) 
@@ -461,11 +889,11 @@ def main():
                     else:
                         st.error("Authentication rejected. Integrity check failed.")
             
-            # Simple demo helper
             st.info("""
             **Demo Credentials:**
-            - **Admin (Hub View):** `admin` / `admin123`
-            - **Employee (Store View):** `employee` / `emp123`
+            - **Super Admin (Hub View & HR):** `admin` / `admin123`
+            - **Store Manager (Manager View):** `manager1` / `mgr123`
+            - **Cashier (POS View):** `employee` / `emp123`
             """)
         return
 
@@ -488,6 +916,9 @@ def main():
 
     if st.session_state['user_role'] == 'Admin':
         render_admin_dashboard()
+    elif st.session_state['user_role'] == 'Manager':
+        # Temporarily use the same function until we build a manager specific view
+        render_employee_dashboard()
     elif st.session_state['user_role'] == 'Employee':
         render_employee_dashboard()
 
