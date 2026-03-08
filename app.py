@@ -59,9 +59,18 @@ def login_user(username, password):
 # ==============================================================================
 
 def initialize_data_optimized():
-    stores = ['Hitech City', 'Banjara Hills', 'Gachibowli', 'Secunderabad', 'Uppal', 
-              'Jubilee Hills', 'Madhapur', 'Kukatpally', 'Begumpet', 'Charminar']
-    products = ['iPhone 15', 'Samsung TV', 'Milk (1L)', 'Rice (25kg)', 'Detergent', 'T-Shirt']
+    stores_info = {
+        'Hitech City': 'HYDSTR001', 'Banjara Hills': 'HYDSTR002', 'Gachibowli': 'HYDSTR003',
+        'Secunderabad': 'HYDSTR004', 'Uppal': 'HYDSTR005', 'Jubilee Hills': 'HYDSTR006',
+        'Madhapur': 'HYDSTR007', 'Kukatpally': 'HYDSTR008', 'Begumpet': 'HYDSTR009', 'Charminar': 'HYDSTR010'
+    }
+    stores = list(stores_info.keys())
+    
+    products_info = {
+        'iPhone 15': 75000.0, 'Samsung TV': 45000.0, 'Milk (1L)': 60.0, 
+        'Rice (25kg)': 1200.0, 'Detergent': 250.0, 'T-Shirt': 500.0
+    }
+    products = list(products_info.keys())
     
     # Coordinates mapping
     coords = {
@@ -72,7 +81,7 @@ def initialize_data_optimized():
         'Begumpet': (17.44, 78.46), 'Charminar': (17.36, 78.47)
     }
     
-    df = pd.DataFrame([{'Location': s, 'Product': p, 'Type': 'Store'} for s in stores for p in products])
+    df = pd.DataFrame([{'Location': s, 'StoreID': stores_info[s], 'Product': p, 'Type': 'Store'} for s in stores for p in products])
     hub_df = pd.DataFrame([{'Location': 'Kompally Hub', 'Product': p, 'Type': 'Hub'} for p in products])
     df = pd.concat([hub_df, df], ignore_index=True)
     
@@ -99,7 +108,8 @@ def initialize_data_optimized():
             'Date': sale_date.strftime("%Y-%m-%d %H:%M"),
             'Location': store,
             'Product': prod,
-            'Quantity': qty
+            'Quantity': qty,
+            'Revenue': qty * products_info[prod]
         })
     sales_df = pd.DataFrame(sales_data)
     # Sort by Date descending correctly
@@ -119,13 +129,30 @@ def initialize_data_optimized():
     # Employees
     employees_data = [
         {'EmpID': 'EMP-0001', 'Name': 'Super Admin', 'Username': 'admin', 'PasswordHash': hash_password('admin123'), 'Contact': 'admin@nexus.com', 'Role': 'Admin', 'Store': 'All', 'Wage': 50000, 'Status': 'Active'},
-        {'EmpID': 'EMP-1042', 'Name': 'Store Manager Hitech', 'Username': 'manager1', 'PasswordHash': hash_password('mgr123'), 'Contact': 'mgr.hitech@nexus.com', 'Role': 'Manager', 'Store': 'Hitech City', 'Wage': 35000, 'Status': 'Active'},
-        {'EmpID': 'EMP-2051', 'Name': 'Cashier Hitech', 'Username': 'employee', 'PasswordHash': hash_password('emp123'), 'Contact': 'cashier.hitech@nexus.com', 'Role': 'Employee', 'Store': 'Hitech City', 'Wage': 20000, 'Status': 'Active'}
+        {'EmpID': 'HYDSTR001-MGR', 'Name': 'Store Manager Hitech', 'Username': 'manager1', 'PasswordHash': hash_password('mgr123'), 'Contact': 'mgr.hitech@nexus.com', 'Role': 'Manager', 'Store': 'Hitech City', 'Wage': 35000, 'Status': 'Active'},
+        {'EmpID': 'EMP-2051', 'Name': 'Cashier Hitech', 'Username': 'employee', 'PasswordHash': hash_password('emp123'), 'Contact': 'cashier.hitech@nexus.com', 'Role': 'Employee', 'Store': 'Hitech City', 'Wage': 20000, 'Status': 'Active'},
+        {'EmpID': 'HYDCHAR001', 'Name': 'Rajesh', 'Username': 'rajesh', 'PasswordHash': hash_password('emp123'), 'Contact': 'rajesh@nexus.com', 'Role': 'Employee', 'Store': 'Charminar', 'Wage': 22000, 'Status': 'Active'},
+        {'EmpID': 'HYDBAN001', 'Name': 'Suresh', 'Username': 'suresh', 'PasswordHash': hash_password('emp123'), 'Contact': 'suresh@nexus.com', 'Role': 'Employee', 'Store': 'Banjara Hills', 'Wage': 25000, 'Status': 'Active'},
+        {'EmpID': 'HYDGAC001', 'Name': 'Ramesh', 'Username': 'ramesh', 'PasswordHash': hash_password('emp123'), 'Contact': 'ramesh@nexus.com', 'Role': 'Employee', 'Store': 'Gachibowli', 'Wage': 24000, 'Status': 'Active'}
     ]
     employees_df = pd.DataFrame(employees_data)
 
     # Attendance
-    attendance_df = pd.DataFrame(columns=['EmpID', 'Date', 'CheckIn', 'CheckOut'])
+    att_data = []
+    for emp_id in [e['EmpID'] for e in employees_data if e['Role'] != 'Admin']:
+        # Generate 15-25 random days of attendance in the last 30 days
+        days_worked = np.random.randint(15, 26)
+        for d in range(days_worked):
+            date_str = (datetime.now() - timedelta(days=np.random.randint(1, 30))).strftime("%Y-%m-%d")
+            att_data.append({
+                'EmpID': emp_id,
+                'Date': date_str,
+                'CheckIn': '09:00:00',
+                'CheckOut': '18:00:00'
+            })
+    attendance_df = pd.DataFrame(att_data).drop_duplicates(subset=['EmpID', 'Date'])
+    if attendance_df.empty:
+        attendance_df = pd.DataFrame(columns=['EmpID', 'Date', 'CheckIn', 'CheckOut'])
 
     # Audit Logs
     audit_logs_df = pd.DataFrame(columns=['Timestamp', 'User', 'Action', 'Details'])
@@ -142,7 +169,9 @@ def initialize_data_optimized():
         'dispatches': dispatches_df,
         'requests': requests_df,
         'stores': stores,
+        'stores_info': stores_info,
         'products': products,
+        'products_info': products_info,
         'employees': employees_df,
         'attendance': attendance_df,
         'audit_logs': audit_logs_df,
@@ -175,7 +204,7 @@ def render_admin_dashboard():
             sales_df['Date'] = pd.to_datetime(sales_df['Date'])
             
             # Sub-tabs for better organization
-            s_tabs = st.tabs(["Overview & Trends", "Peak Hour Heatmap", "Dead Stock Analysis"])
+            s_tabs = st.tabs(["Overview & Trends", "Store Financial Monitor", "Peak Hour Heatmap", "Dead Stock Analysis"])
             
             with s_tabs[0]:
                 colA, colB = st.columns([1, 3])
@@ -216,6 +245,46 @@ def render_admin_dashboard():
                     st.warning("No sales found in the selected date range.")
             
             with s_tabs[1]:
+                st.markdown("### Store Financial & Revenue Monitor")
+                st.markdown("Analyze revenue and specific metrics by store and product.")
+                
+                f_col1, f_col2 = st.columns(2)
+                with f_col1:
+                    mon_store = st.selectbox("Select Store", db['stores'], key="mon_store")
+                    mon_prod = st.selectbox("Select Product", db['products'] + ["All Products"], key="mon_prod")
+                with f_col2:
+                    m_start_d = st.date_input("From Date", min_date, key="mon_start")
+                    m_end_d = st.date_input("To Date", max_date, key="mon_end")
+                
+                # Filter sales
+                s_mask = (sales_df['Date'].dt.date >= m_start_d) & (sales_df['Date'].dt.date <= m_end_d) & (sales_df['Location'] == mon_store)
+                if mon_prod != "All Products":
+                    s_mask = s_mask & (sales_df['Product'] == mon_prod)
+                    
+                mon_sales = sales_df.loc[s_mask]
+                
+                # Get store specific info
+                store_employees = db['employees'][ (db['employees']['Store'] == mon_store) | (db['employees']['Store'] == 'All') ]
+                num_staff = len(store_employees)
+                store_id = db['stores_info'].get(mon_store, 'N/A')
+                
+                st.divider()
+                st.markdown(f"#### Store Profile: {mon_store} (ID: {store_id})")
+                m_c1, m_c2, m_c3 = st.columns(3)
+                m_c1.metric("Current Staff Count", num_staff)
+                
+                total_qty = mon_sales['Quantity'].sum() if not mon_sales.empty else 0
+                total_rev = mon_sales['Revenue'].sum() if not mon_sales.empty else 0
+                
+                m_c2.metric("Items Sold", total_qty)
+                m_c3.metric("Total Revenue (₹)", f"₹{total_rev:,.2f}")
+                
+                if not mon_sales.empty:
+                    st.dataframe(mon_sales[['Date', 'Product', 'Quantity', 'Revenue']].sort_values(by='Date', ascending=False), hide_index=True, width='stretch')
+                else:
+                    st.info("No sales data matches the criteria.")
+                    
+            with s_tabs[2]:
                 st.markdown("### Peak Hour Sales Heatmap")
                 st.markdown("Identify the busiest times across stores for optimized shift scheduling.")
                 
@@ -234,7 +303,7 @@ def render_admin_dashboard():
                 fig_hm.update_layout(xaxis=dict(tickmode='linear', tick0=0, dtick=1))
                 st.plotly_chart(fig_hm, width='stretch')
 
-            with s_tabs[2]:
+            with s_tabs[3]:
                 st.markdown("### Dead Stock Analytics")
                 
                 ds_range = st.selectbox("Inactivity Threshold (Days)", [30, 60, 90], index=0)
@@ -604,13 +673,13 @@ def render_admin_dashboard():
                 if not valid_att.empty:
                     # Calculate dummy 'days worked' by group counting
                     days_worked = valid_att.groupby('EmpID').size().reset_index(name='Days_Worked')
-                    emp_wage = employees[['EmpID', 'Name', 'Wage']]
+                    emp_wage = employees[['EmpID', 'Name', 'Role', 'Store', 'Wage']]
                     
                     payroll = pd.merge(days_worked, emp_wage, on='EmpID')
                     # Assume base wage is for 30 days, calculate daily rate
                     payroll['Calculated_Payout'] = (payroll['Wage'] / 30 * payroll['Days_Worked']).astype(int)
                     
-                    st.dataframe(payroll[['EmpID', 'Name', 'Days_Worked', 'Calculated_Payout']], hide_index=True, width='stretch')
+                    st.dataframe(payroll[['EmpID', 'Name', 'Role', 'Store', 'Wage', 'Days_Worked', 'Calculated_Payout']], hide_index=True, width='stretch')
                     
                     if st.button("Generate Selected Payslip (PDF Mock)"):
                         st.success("📄 Generating PDF... (Simulated download complete: 'payslip_EMP.pdf')")
@@ -692,6 +761,7 @@ def render_employee_dashboard():
                             'Location': my_store,
                             'Product': prod_sold,
                             'Quantity': qty_sold,
+                            'Revenue': qty_sold * db['products_info'].get(prod_sold, 0),
                             'Status': 'Cached' if offline_mode else 'Synced'
                         }
                         
